@@ -27,6 +27,9 @@
     },
     "markdown.markdownItPlugins": true
   },
+  "extensionKind": [
+    "workspace"
+  ],
   "scripts": {
     "vscode:prepublish": "yarn run package",
     "compile": "webpack",
