@@ -5,6 +5,10 @@ import * as path from 'path'
 export function activate(context: vscode.ExtensionContext) {
   // if (!vscode.workspace.getConfiguration('vscode-wiki').get<boolean>('enabled')) return
 
+  const root = vscode.workspace.workspaceFolders?.[0].uri
+  if (root === undefined) return
+  const rootPath = root.path
+
   vscode.languages.registerCompletionItemProvider(
     'markdown',
     {
@@ -31,17 +35,48 @@ export function activate(context: vscode.ExtensionContext) {
   )
 
   let tree: Tree | undefined = undefined
-  async function updateTree() {
-    tree = await getTree()
+  const updateTree = async () => {
+    tree = await getTree(root)
   }
-
-  updateTree()
 
   vscode.workspace.onDidCreateFiles(updateTree)
   vscode.workspace.onDidDeleteFiles(updateTree)
   vscode.workspace.onDidRenameFiles(updateTree)
 
-  const rootPath = vscode.workspace.workspaceFolders?.[0].uri.path
+  const linkPattern = /(?<!(?:\\\\)*\\)\[\[(.+?)(?<!(\\\\)*\\)\]\]/g
+
+  updateTree().then(() => {
+    vscode.languages.registerDocumentLinkProvider('markdown', {
+      provideDocumentLinks(document): vscode.DocumentLink[] | undefined {
+        if (tree === undefined) return undefined
+
+        const relativeCurrentPath = getRelativePath(document.uri.path, rootPath) ?? ''
+
+        const text = document.getText()
+        const links: vscode.DocumentLink[] = []
+
+        for (const [i, line] of text.split('\n').entries()) {
+          for (const { index, 0: whole, 1: name } of line.matchAll(linkPattern)) {
+            if (index === undefined) continue
+
+            const target = findPathFromTree(tree, name, relativeCurrentPath)
+
+            links.push(
+              new vscode.DocumentLink(
+                new vscode.Range(
+                  new vscode.Position(i, index),
+                  new vscode.Position(i, index + whole.length)
+                ),
+                vscode.Uri.joinPath(root, `${target}.md`)
+              )
+            )
+          }
+        }
+
+        return links
+      }
+    })
+  })
 
   return {
     extendMarkdownIt(md: MarkdownIt) {
@@ -87,10 +122,7 @@ export function activate(context: vscode.ExtensionContext) {
         ): string => {
           const token = tokens[index]
           const currentPath = env.currentDocument.path
-          const relativeCurrentPath =
-            rootPath !== undefined && currentPath.startsWith(rootPath)
-              ? currentPath.slice(rootPath.length)
-              : '/'
+          const relativeCurrentPath = getRelativePath(currentPath, rootPath) ?? ''
           const targetPath =
             tree !== undefined ? findPathFromTree(tree, token.content, relativeCurrentPath) : ''
           return `<a href="${targetPath}.md" data-href="${targetPath}.md">${token.content}</a>`
@@ -109,10 +141,7 @@ type Tree = Node[]
 
 const mdFilePattern = /(.+)\.md$/
 
-async function getTree(parent?: vscode.Uri): Promise<Tree> {
-  parent ??= vscode.workspace.workspaceFolders?.[0].uri
-  if (parent === undefined) return []
-
+async function getTree(parent: vscode.Uri): Promise<Tree> {
   const nodes: Tree = []
   for (const [name, fileType] of await vscode.workspace.fs.readDirectory(parent)) {
     switch (fileType) {
@@ -186,4 +215,11 @@ function digTree(tree: Tree, names: string[]): Node | undefined {
   if (rest.length === 0) return node
   if (node.children === undefined) return undefined
   return digTree(node.children, rest)
+}
+
+function getRelativePath(path: string, basePath: string): string | undefined {
+  if (path.startsWith(basePath)) {
+    return path.slice(basePath.length)
+  }
+  return undefined
 }
