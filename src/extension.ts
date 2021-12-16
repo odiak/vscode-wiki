@@ -3,7 +3,7 @@ import * as MarkdownIt from 'markdown-it'
 import * as path from 'path'
 
 export function activate(context: vscode.ExtensionContext) {
-  // if (!vscode.workspace.getConfiguration('vscode-wiki').get<boolean>('enabled')) return
+  if (!vscode.workspace.getConfiguration('vscode-wiki').get<boolean>('enabled')) return
 
   const root = vscode.workspace.workspaceFolders?.[0].uri
   if (root === undefined) return
