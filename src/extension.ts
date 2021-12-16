@@ -13,6 +13,7 @@ export function activate(context: vscode.ExtensionContext) {
     'markdown',
     {
       provideCompletionItems(document, position) {
+        if (tree === undefined) return undefined
         if (position.character < 2) return undefined
         const text = document.getText(
           new vscode.Range(new vscode.Position(position.line, 0), position)
@@ -21,11 +22,7 @@ export function activate(context: vscode.ExtensionContext) {
         const j = text.lastIndexOf(']]')
         if (i === -1 || j > i) return undefined
 
-        return [
-          new vscode.CompletionItem('Foobar'),
-          new vscode.CompletionItem('Fooban'),
-          new vscode.CompletionItem('Foorin')
-        ]
+        return getAllSortedPathsFromTree(tree).map((path) => new vscode.CompletionItem(path))
       },
       resolveCompletionItem(item) {
         return undefined
@@ -134,7 +131,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {}
 
-type File = { name: string; children?: undefined }
+type File = { name: string; children?: undefined; lastModified: number }
 type Folder = { name: string; children: Tree }
 type Node = Folder | File
 type Tree = Node[]
@@ -144,11 +141,14 @@ const mdFilePattern = /(.+)\.md$/
 async function getTree(parent: vscode.Uri): Promise<Tree> {
   const nodes: Tree = []
   for (const [name, fileType] of await vscode.workspace.fs.readDirectory(parent)) {
+    if (name.startsWith('.')) continue
+
     switch (fileType) {
       case vscode.FileType.File: {
         const m = name.match(mdFilePattern)
         if (m !== null) {
-          nodes.push({ name: m[1] })
+          const s = await vscode.workspace.fs.stat(vscode.Uri.joinPath(parent, name))
+          nodes.push({ name: m[1], lastModified: s.mtime })
         }
         break
       }
@@ -222,4 +222,24 @@ function getRelativePath(path: string, basePath: string): string | undefined {
     return path.slice(basePath.length)
   }
   return undefined
+}
+
+function getAllSortedPathsFromTree(tree: Tree): Array<string> {
+  return [...getAllPathsFromTree(tree, '')]
+    .sort((a, b) => a.lastModified - b.lastModified)
+    .map(({ path }) => path)
+}
+
+function* getAllPathsFromTree(
+  tree: Tree,
+  parentPath: string = ''
+): Iterable<{ path: string; lastModified: number }> {
+  for (const node of tree) {
+    const nodePath = path.join(parentPath, node.name)
+    if (node.children === undefined) {
+      yield { path: nodePath, lastModified: node.lastModified }
+    } else {
+      yield* getAllPathsFromTree(node.children, nodePath)
+    }
+  }
 }
