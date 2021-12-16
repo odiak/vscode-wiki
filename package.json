@@ -4,8 +4,11 @@
   "description": "",
   "version": "0.0.0",
   "license": "MIT",
+  "repository": {
+    "url": "https://github.com/odiak/vscode-wiki"
+  },
   "engines": {
-    "vscode": "^1.62.0"
+    "vscode": "^1.63.0"
   },
   "categories": [
     "Other"
@@ -39,7 +42,8 @@
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "yarn run compile-tests && yarn run compile && yarn run lint",
     "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
+    "test": "node ./out/test/runTest.js",
+    "list": "(yarn info --json)"
   },
   "devDependencies": {
     "@types/glob": "^7.1.4",
