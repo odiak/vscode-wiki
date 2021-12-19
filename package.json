@@ -28,7 +28,16 @@
         }
       }
     },
-    "markdown.markdownItPlugins": true
+    "markdown.markdownItPlugins": true,
+    "grammars": [
+      {
+        "scopeName": "markdown.wiki-link",
+        "path": "./syntaxes/wiki-link.tmLanguage.json",
+        "injectTo": [
+          "text.html.markdown"
+        ]
+      }
+    ]
   },
   "extensionKind": [
     "workspace"

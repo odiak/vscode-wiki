@@ -1,0 +1,17 @@
+{
+  "fileTypes": [],
+  "injectionSelector": "L:meta.paragraph.markdown",
+  "patterns": [{ "include": "#wiki_link" }],
+  "scopeName": "markdown.wiki-link",
+  "repository": {
+    "wiki_link": {
+      "name": "markup.wiki_link.markdown",
+      "match": "(?<!\\[|(?:(?:\\\\\\\\)*\\\\))(\\[\\[)(.+?)(?<!(?:\\\\\\\\)*\\\\)(\\]\\])",
+      "captures": {
+        "1": { "name": "punctuation.definition.string.begin.markdown" },
+        "2": { "name": "string.other.wiki-link.description.markdown" },
+        "3": { "name": "punctuation.definition.string.end.markdown" }
+      }
+    }
+  }
+}
