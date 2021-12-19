@@ -43,6 +43,9 @@ export function activate(context: vscode.ExtensionContext) {
   const linkPattern = /(?<!(?:\\\\)*\\)\[\[(.+?)(?<!(\\\\)*\\)\]\]/g
 
   updateTree().then(() => {
+    // reload after tree became ready
+    vscode.commands.executeCommand('markdown.preview.refresh')
+
     vscode.languages.registerDocumentLinkProvider('markdown', {
       provideDocumentLinks(document): vscode.DocumentLink[] | undefined {
         if (tree === undefined) return undefined
