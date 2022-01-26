@@ -1,6 +1,45 @@
 import * as vscode from 'vscode'
 import * as MarkdownIt from 'markdown-it'
 import * as path from 'path'
+import { TextDecoder } from 'util'
+import Token from 'markdown-it/lib/token'
+
+/**
+ * It's like Promise but you can put value multiple times
+ */
+class Promisish<T> {
+  value: T | undefined = undefined
+  private isSettled = false
+  private promise: Promise<T>
+  private resolve?: (value: T) => void
+
+  constructor() {
+    this.promise = new Promise((resolve) => {
+      this.resolve = resolve
+    })
+  }
+
+  set(value: T) {
+    this.value = value
+    if (this.isSettled) {
+      this.promise = Promise.resolve(value)
+    } else {
+      this.resolve?.(value)
+      this.resolve = undefined
+      this.isSettled = true
+    }
+  }
+
+  then<R1 = T, R2 = never>(
+    onFullfilled: (value: T) => R1 | PromiseLike<R1>,
+    onRejected?: ((reason?: any) => R2 | PromiseLike<R2>) | null
+  ): Promise<R1 | R2> {
+    return this.promise.then(onFullfilled, onRejected)
+  }
+}
+
+const treeP = new Promisish<Tree>()
+const mdP = new Promisish<MarkdownIt>()
 
 export function activate(context: vscode.ExtensionContext) {
   if (!vscode.workspace.getConfiguration('vscode-wiki').get<boolean>('enabled')) return
@@ -12,8 +51,8 @@ export function activate(context: vscode.ExtensionContext) {
   vscode.languages.registerCompletionItemProvider(
     'markdown',
     {
-      provideCompletionItems(document, position) {
-        if (tree === undefined) return undefined
+      async provideCompletionItems(document, position) {
+        const tree = await treeP
         if (position.character < 2) return undefined
         const text = document.getText(
           new vscode.Range(new vscode.Position(position.line, 0), position)
@@ -23,17 +62,13 @@ export function activate(context: vscode.ExtensionContext) {
         if (i === -1 || j > i) return undefined
 
         return getAllSortedPathsFromTree(tree).map((path) => new vscode.CompletionItem(path))
-      },
-      resolveCompletionItem(item) {
-        return undefined
       }
     },
     '['
   )
 
-  let tree: Tree | undefined = undefined
   const updateTree = async () => {
-    tree = await getTree(root)
+    treeP.set(await getTree(root))
   }
 
   vscode.workspace.onDidCreateFiles(updateTree)
@@ -47,8 +82,8 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.executeCommand('markdown.preview.refresh')
 
     vscode.languages.registerDocumentLinkProvider('markdown', {
-      provideDocumentLinks(document): vscode.DocumentLink[] | undefined {
-        if (tree === undefined) return undefined
+      async provideDocumentLinks(document): Promise<vscode.DocumentLink[] | undefined> {
+        const tree = await treeP
 
         const relativeCurrentPath = getRelativePath(document.uri.path, rootPath) ?? ''
 
@@ -78,8 +113,41 @@ export function activate(context: vscode.ExtensionContext) {
     })
   })
 
+  let provider: LinkTreeProvider | undefined
+  function createOrRefreshLinksTree() {
+    if (provider !== undefined) {
+      provider.refresh()
+      return
+    }
+
+    vscode.window.createTreeView('pageLinks', {
+      treeDataProvider: (provider = new LinkTreeProvider())
+    })
+  }
+
+  vscode.window.onDidChangeActiveTextEditor((editor) => {
+    if (editor?.document.languageId === 'markdown') {
+      vscode.commands.executeCommand('setContext', 'vscode-wiki.showLinks', true)
+      createOrRefreshLinksTree()
+    } else {
+      vscode.commands.executeCommand('setContext', 'vscode-wiki.showLinks', false)
+    }
+  })
+
+  vscode.workspace.onDidChangeTextDocument((e) => {
+    if (e.document === vscode.window.activeTextEditor?.document) {
+      createOrRefreshLinksTree()
+    }
+  })
+
+  if (vscode.window.activeTextEditor?.document.languageId === 'markdown') {
+    vscode.commands.executeCommand('setContext', 'vscode-wiki.showLinks', true)
+    createOrRefreshLinksTree()
+  }
+
   return {
     extendMarkdownIt(md: MarkdownIt) {
+      mdP.set(md)
       return md.use((md) => {
         md.inline.ruler.after('emphasis', 'wiki-link', (state, silent) => {
           if (state.src.slice(state.pos, state.pos + 2) !== '[[') return false
@@ -120,6 +188,7 @@ export function activate(context: vscode.ExtensionContext) {
           _options,
           env: { currentDocument: vscode.Uri; [key: string]: any }
         ): string => {
+          const tree = treeP.value
           const token = tokens[index]
           const currentPath = env.currentDocument.path
           const relativeCurrentPath = getRelativePath(currentPath, rootPath) ?? ''
@@ -243,6 +312,133 @@ function* getAllPathsFromTree(
       yield { path: nodePath, lastModified: node.lastModified }
     } else {
       yield* getAllPathsFromTree(node.children, nodePath)
+    }
+  }
+}
+
+type LinkTreeItem =
+  | { type: 'header-outgoing' }
+  | { type: 'header-incoming' }
+  | { type: 'link'; name: string }
+class LinkTreeProvider implements vscode.TreeDataProvider<LinkTreeItem> {
+  private callbacks = new Set<(e: void | LinkTreeItem | null | undefined) => void>()
+
+  refresh() {
+    for (const f of this.callbacks) {
+      f(undefined)
+    }
+  }
+
+  onDidChangeTreeData(
+    callback: (e: void | LinkTreeItem | null | undefined) => void,
+    disposables?: Array<vscode.Disposable>
+  ): vscode.Disposable {
+    this.callbacks.add(callback)
+
+    const disposable: vscode.Disposable = {
+      dispose: () => {
+        this.callbacks.delete(callback)
+      }
+    }
+    disposables?.push(disposable)
+    return disposable
+  }
+
+  async getChildren(element?: LinkTreeItem): Promise<LinkTreeItem[] | undefined> {
+    switch (element?.type) {
+      case undefined:
+        return [{ type: 'header-outgoing' }, { type: 'header-incoming' }]
+
+      case 'header-incoming': {
+        const tree = await treeP
+        const md = await mdP
+        const paths = Array.from(getAllPathsFromTree(tree)).map(({ path }) => path)
+        const workspaceUri = vscode.workspace.workspaceFolders?.[0].uri
+        if (workspaceUri === undefined) return
+        const selfUri = vscode.window.activeTextEditor?.document.uri
+        if (
+          selfUri === undefined ||
+          !selfUri.path.startsWith(workspaceUri.path) ||
+          !selfUri.path.endsWith('.md')
+        )
+          return
+        const selfPath = path.relative(workspaceUri.path, selfUri.path).slice(0, -3)
+        const links = new Set<string>()
+        for (const p of paths) {
+          const tokens: Token[] = md.parse(
+            new TextDecoder().decode(
+              await vscode.workspace.fs.readFile(
+                workspaceUri.with({ path: path.join(workspaceUri.path, p) + '.md' })
+              )
+            ),
+            {}
+          )
+          for (const link of enumerateLinks(tokens)) {
+            if (link === selfPath) {
+              links.add(p)
+            }
+          }
+        }
+        return Array.from(links).map((link) => ({ type: 'link', name: link }))
+      }
+
+      case 'header-outgoing': {
+        const md = await mdP
+        const workspaceUri = vscode.workspace.workspaceFolders?.[0].uri
+        if (workspaceUri === undefined) return
+        const activeDocument = vscode.window.activeTextEditor?.document
+        if (activeDocument === undefined) return
+        const content = new TextDecoder().decode(
+          await vscode.workspace.fs.readFile(activeDocument.uri)
+        )
+        const tokens = md.parse(content, {})
+        const links = Array.from(enumerateLinks(tokens))
+        return links.map((link) => ({ type: 'link', name: link }))
+      }
+    }
+  }
+
+  getTreeItem(element: LinkTreeItem): vscode.TreeItem | Thenable<vscode.TreeItem> {
+    switch (element.type) {
+      case 'header-incoming':
+        return {
+          label: 'Incoming Links',
+          collapsibleState: vscode.TreeItemCollapsibleState.Expanded
+        }
+
+      case 'header-outgoing':
+        return {
+          label: 'Outgoing Links',
+          collapsibleState: vscode.TreeItemCollapsibleState.Expanded
+        }
+
+      case 'link': {
+        const workspaceUri = vscode.workspace.workspaceFolders?.[0].uri
+        if (workspaceUri === undefined) throw new Error('no workspace')
+
+        return {
+          label: element.name,
+          command: {
+            title: '',
+            command: 'vscode.open',
+            arguments: [
+              workspaceUri.with({ path: path.join(workspaceUri.path, element.name) + '.md' })
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+
+function* enumerateLinks(tokens: Token[]): Iterable<string> {
+  for (const token of tokens) {
+    if (token.type === 'wiki-link') {
+      yield token.content
+      continue
+    }
+    if (token.children) {
+      yield* enumerateLinks(token.children)
     }
   }
 }
