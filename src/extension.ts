@@ -7,7 +7,7 @@ import Token from 'markdown-it/lib/token'
 /**
  * It's like Promise but you can put value multiple times
  */
-class Promisish<T> {
+class LazyVariable<T> implements PromiseLike<T> {
   value: T | undefined = undefined
   private isSettled = false
   private promise: Promise<T>
@@ -38,8 +38,8 @@ class Promisish<T> {
   }
 }
 
-const treeP = new Promisish<Tree>()
-const mdP = new Promisish<MarkdownIt>()
+const treeP = new LazyVariable<Tree>()
+const mdP = new LazyVariable<MarkdownIt>()
 
 export function activate(context: vscode.ExtensionContext) {
   if (!vscode.workspace.getConfiguration('vscode-wiki').get<boolean>('enabled')) return
