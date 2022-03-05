@@ -38,21 +38,25 @@ class LazyVariable<T> implements PromiseLike<T> {
   }
 }
 
-const treeP = new LazyVariable<Tree>()
-const mdP = new LazyVariable<MarkdownIt>()
+class Environment {
+  readonly treeP = new LazyVariable<Tree>()
+  readonly mdP = new LazyVariable<MarkdownIt>()
+
+  constructor(public readonly rootUri: vscode.Uri) {}
+}
 
 export function activate(context: vscode.ExtensionContext) {
   if (!vscode.workspace.getConfiguration('vscode-wiki').get<boolean>('enabled')) return
 
   const root = vscode.workspace.workspaceFolders?.[0].uri
   if (root === undefined) return
-  const rootPath = root.path
+  const env = new Environment(root)
 
   vscode.languages.registerCompletionItemProvider(
     'markdown',
     {
       async provideCompletionItems(document, position) {
-        const tree = await treeP
+        const tree = await env.treeP
         if (position.character < 2) return undefined
         const text = document.getText(
           new vscode.Range(new vscode.Position(position.line, 0), position)
@@ -68,7 +72,7 @@ export function activate(context: vscode.ExtensionContext) {
   )
 
   const updateTree = async () => {
-    treeP.set(await getTree(root))
+    env.treeP.set(await getTree(root))
   }
 
   vscode.workspace.onDidCreateFiles(updateTree)
@@ -83,9 +87,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     vscode.languages.registerDocumentLinkProvider('markdown', {
       async provideDocumentLinks(document): Promise<vscode.DocumentLink[] | undefined> {
-        const tree = await treeP
+        const tree = await env.treeP
 
-        const relativeCurrentPath = getRelativePath(document.uri.path, rootPath) ?? ''
+        const relativeCurrentPath = getRelativePath(document.uri.path, env.rootUri.path) ?? ''
 
         const text = document.getText()
         const links: vscode.DocumentLink[] = []
@@ -121,7 +125,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     vscode.window.createTreeView('pageLinks', {
-      treeDataProvider: (provider = new LinkTreeProvider())
+      treeDataProvider: (provider = new LinkTreeProvider(env))
     })
   }
 
@@ -147,7 +151,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   return {
     extendMarkdownIt(md: MarkdownIt) {
-      mdP.set(md)
+      env.mdP.set(md)
       return md.use((md) => {
         md.inline.ruler.after('emphasis', 'wiki-link', (state, silent) => {
           if (state.src.slice(state.pos, state.pos + 2) !== '[[') return false
@@ -186,12 +190,12 @@ export function activate(context: vscode.ExtensionContext) {
           tokens,
           index: number,
           _options,
-          env: { currentDocument: vscode.Uri; [key: string]: any }
+          renderEnv: { currentDocument: vscode.Uri; [key: string]: any }
         ): string => {
-          const tree = treeP.value
+          const tree = env.treeP.value
           const token = tokens[index]
-          const currentPath = env.currentDocument.path
-          const relativeCurrentPath = getRelativePath(currentPath, rootPath) ?? ''
+          const currentPath = renderEnv.currentDocument.path
+          const relativeCurrentPath = getRelativePath(currentPath, env.rootUri.path) ?? ''
           const targetPath =
             tree !== undefined ? findPathFromTree(tree, token.content, relativeCurrentPath) : ''
           return `<a href="${targetPath}.md" data-href="${targetPath}.md">${token.content}</a>`
@@ -323,6 +327,8 @@ type LinkTreeItem =
 class LinkTreeProvider implements vscode.TreeDataProvider<LinkTreeItem> {
   private callbacks = new Set<(e: void | LinkTreeItem | null | undefined) => void>()
 
+  constructor(private env: Environment) {}
+
   refresh() {
     for (const f of this.callbacks) {
       f(undefined)
@@ -350,8 +356,8 @@ class LinkTreeProvider implements vscode.TreeDataProvider<LinkTreeItem> {
         return [{ type: 'header-outgoing' }, { type: 'header-incoming' }]
 
       case 'header-incoming': {
-        const tree = await treeP
-        const md = await mdP
+        const tree = await this.env.treeP
+        const md = await this.env.mdP
         const paths = Array.from(getAllPathsFromTree(tree)).map(({ path }) => path)
         const workspaceUri = vscode.workspace.workspaceFolders?.[0].uri
         if (workspaceUri === undefined) return
@@ -383,7 +389,7 @@ class LinkTreeProvider implements vscode.TreeDataProvider<LinkTreeItem> {
       }
 
       case 'header-outgoing': {
-        const md = await mdP
+        const md = await this.env.mdP
         const workspaceUri = vscode.workspace.workspaceFolders?.[0].uri
         if (workspaceUri === undefined) return
         const activeDocument = vscode.window.activeTextEditor?.document
