@@ -118,21 +118,29 @@ export function activate(context: vscode.ExtensionContext) {
   })
 
   let provider: LinkTreeProvider | undefined
-  function createOrRefreshLinksTree() {
-    if (provider !== undefined) {
-      provider.refresh()
+  let timer: NodeJS.Timeout | undefined = undefined
+  function createOrRefreshLinksTree(immediate: boolean = false) {
+    if (provider === undefined) {
+      provider = new LinkTreeProvider(env)
+      vscode.window.createTreeView('pageLinks', { treeDataProvider: provider })
       return
     }
 
-    vscode.window.createTreeView('pageLinks', {
-      treeDataProvider: (provider = new LinkTreeProvider(env))
-    })
+    if (timer) {
+      clearTimeout(timer)
+    }
+    if (immediate) {
+      timer = undefined
+      provider.refresh()
+    } else {
+      timer = setTimeout(() => provider?.refresh(), 1000)
+    }
   }
 
   vscode.window.onDidChangeActiveTextEditor((editor) => {
     if (editor?.document.languageId === 'markdown') {
       vscode.commands.executeCommand('setContext', 'vscode-wiki.showLinks', true)
-      createOrRefreshLinksTree()
+      createOrRefreshLinksTree(true)
     } else {
       vscode.commands.executeCommand('setContext', 'vscode-wiki.showLinks', false)
     }
@@ -146,7 +154,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   if (vscode.window.activeTextEditor?.document.languageId === 'markdown') {
     vscode.commands.executeCommand('setContext', 'vscode-wiki.showLinks', true)
-    createOrRefreshLinksTree()
+    createOrRefreshLinksTree(true)
   }
 
   return {
